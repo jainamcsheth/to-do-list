@@ -7,11 +7,27 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ObjectAnimator
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import kotlin.math.abs
 
-class MainActivity : AppCompatActivity(), DeleteAllDialog.OnYesClickListener {
+const val SHAKE_THRESHOLD = 500
+
+class MainActivity : AppCompatActivity(), SensorEventListener, DeleteAllDialog.OnYesClickListener {
     private var toDoList = ToDoList(this)
     private lateinit var itemEditText: EditText
     private lateinit var listTextView: TextView
+
+    private lateinit var soundEffects: SoundEffects
+
+    private var lastAcceleration = SensorManager.GRAVITY_EARTH
+    private lateinit var sensorManager: SensorManager
+    private var accelerometer: Sensor? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -22,6 +38,19 @@ class MainActivity : AppCompatActivity(), DeleteAllDialog.OnYesClickListener {
         findViewById<Button>(R.id.add_button).setOnClickListener { addButtonClick() }
         findViewById<Button>(R.id.settings_button).setOnClickListener { onClickSettings() }
         findViewById<Button>(R.id.clear_button).setOnClickListener { clearButtonClick() }
+
+        soundEffects = SoundEffects.getInstance(applicationContext)
+
+        sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
+        accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+
+         // For testing in the emulator
+        listTextView.setOnClickListener { onYesClick() }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        soundEffects.release()
     }
 
     override fun onResume() {
@@ -30,6 +59,8 @@ class MainActivity : AppCompatActivity(), DeleteAllDialog.OnYesClickListener {
         // Attempt to load a previously saved list
         toDoList.readFromFile()
         displayList()
+
+        sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_NORMAL)
     }
 
     override fun onPause() {
@@ -37,10 +68,11 @@ class MainActivity : AppCompatActivity(), DeleteAllDialog.OnYesClickListener {
 
         // Save list for later
         toDoList.saveToFile()
+
+        sensorManager.unregisterListener(this, accelerometer)
     }
 
     private fun addButtonClick() {
-
         // Ignore any leading or trailing spaces
         val item = itemEditText.text.toString().trim()
 
@@ -49,6 +81,8 @@ class MainActivity : AppCompatActivity(), DeleteAllDialog.OnYesClickListener {
 
         // Add the item to the list and display it
         if (item.isNotEmpty()) {
+            soundEffects.playTone()
+
             toDoList.addItem(item)
             displayList()
         }
@@ -68,7 +102,7 @@ class MainActivity : AppCompatActivity(), DeleteAllDialog.OnYesClickListener {
         listTextView.text = itemText.toString()
     }
 
-    override fun onYesClick() {
+    fun clearToDoList() {
         toDoList.clear()
         displayList()
     }
@@ -81,5 +115,52 @@ class MainActivity : AppCompatActivity(), DeleteAllDialog.OnYesClickListener {
     private fun onClickSettings() {
         val intent = Intent(this, SettingsActivity::class.java)
         startActivity(intent)
+    }
+
+    override fun onYesClick() {
+
+        // Animate down off screen
+        val screenHeight = this.window.decorView.height.toFloat()
+        val moveBoardOff = ObjectAnimator.ofFloat(
+            listTextView, "translationX", screenHeight)
+        moveBoardOff.duration = 700
+        moveBoardOff.start()
+
+        moveBoardOff.addListener(object : AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: Animator) {
+                clearToDoList()
+
+                 // Animate from above the screen down to default location
+                val moveBoardOn = ObjectAnimator.ofFloat(
+                    listTextView, "translationX", -screenHeight, 0f)
+                moveBoardOn.duration = 700
+                moveBoardOn.start()
+            }
+        })
+    }
+
+    override fun onSensorChanged(event: SensorEvent) {
+        // Get accelerometer values
+        val x: Float = event.values[0]
+        val y: Float = event.values[1]
+        val z: Float = event.values[2]
+
+        // Find magnitude of acceleration
+        val currentAcceleration: Float = x * x + y * y + z * z
+
+        // Calculate difference between 2 readings
+        val delta = currentAcceleration - lastAcceleration
+
+        // Save for next time
+        lastAcceleration = currentAcceleration
+
+        // Detect shake
+        if (abs(delta) > SHAKE_THRESHOLD) {
+            onYesClick()
+        }
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+        // Nothing to do
     }
 }
